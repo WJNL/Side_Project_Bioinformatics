@@ -1,145 +1,190 @@
-# Classifying Cell Types in Single-Cell Data: Genes vs. Biological Pathways
+# Classical Machine Learning and Biologically Informed Feature Representation for Single-Cell Classification
 
-In this project I used machine learning to predict the cell type of blood cells from their gene expression. Then I asked a second question: what happens if I give the model *biological pathways* instead of single genes?
+*A comparison of gene-level and pathway-level features on the PBMC 3k dataset*
 
-The full code and explanations are in the notebook: [`Single_cell_ML_project_clean.ipynb`](Single_cell_ML_project_clean.ipynb).
+Code and full explanations: [`Single_cell_ML_project_clean.ipynb`](Single_cell_ML_project_clean.ipynb)
 
 ---
 
-## 1. Why I did this project
+## Abstract
 
-Single-cell RNA sequencing (scRNA-seq) tells us how active each gene is in each single cell. A typical dataset has thousands of genes per cell, so it is a good playground for machine learning.
+Single-cell RNA sequencing (scRNA-seq) gives us gene expression for thousands of individual cells, and machine learning can use it to predict cell types. In this project, I tested two things on the PBMC 3k dataset. First, I compared classical machine learning models (Logistic Regression, Random Forest, SVM and XGBoost) on gene-level features. Second, I replaced the genes with pathway scores built from immune-related Reactome pathways and checked what changes.
 
-Models that use thousands of genes can predict very well, but it is hard to connect their predictions to real biology. So I wanted to answer two questions:
+The tuned Logistic Regression with 997 genes performed best (test accuracy 0.943, macro F1 0.925). Its main weakness was the separation of CD4 and CD8 T cells. About 16% of the CD8 T cells in the test set were predicted as CD4 T cells by all four models. The pathway-level model with 30 features performed clearly worse (test accuracy 0.778, macro F1 0.697). In simple words: summarising genes into pathway averages made the data easier to read biologically, but it also removed information that the model needed.
 
-- **RQ1 (gene level):** How well can classical machine learning classify cell types from gene expression?
-- **RQ2 (pathway level):** If I replace genes with pathway scores (using Reactome, a database of biological pathways), does the model still work? What do we gain and what do we lose?
+**Keywords:** scRNA-seq, cell-type classification, feature selection, Logistic Regression, pathway analysis, Reactome, model interpretability
 
-## 2. The data
+---
 
-I used the well-known **PBMC 3k** dataset (peripheral blood cells), loaded from `scanpy`:
+## 1. Introduction
 
-- 2,638 cells and 1,838 genes
-- 8 cell types: CD4 T cells, CD8 T cells, B cells, NK cells, two types of monocytes, dendritic cells and megakaryocytes
-- The data were already filtered, normalised and scaled, so I could go straight to modelling
+scRNA-seq measures how active each gene is in every single cell. A typical dataset contains thousands of genes per cell, so it is a good case for supervised machine learning. However, gene-level models often use hundreds or thousands of features. They can predict well, but it is difficult to link their decisions to real biological processes.
 
-The classes are very unbalanced. CD4 T cells are 1,144 cells, but there are only 15 megakaryocytes.
+One idea is to use biological knowledge, for example pathway databases, to build the features. In theory, this could make the model easier to understand. But it is not clear if it keeps the predictive power. This project looks at both sides.
 
-![Cell type distribution](images/01_cell_type_distribution.png)
+### Research questions
 
-Because of this, accuracy alone can be misleading. I used **macro F1** as my main metric, because it gives every cell type the same weight, even the rare ones. I split the data into 80% training and 20% test (stratified), and I did all tuning with 5-fold cross-validation on the training set only.
+- **RQ1 (gene level):** How effectively can classical machine learning methods classify cell types using gene-level expression features?
+- **RQ2 (pathway level):** How does biologically informed feature representation (pathway scores) affect classification performance, and what are the trade-offs compared with gene-level features?
 
-## 3. Part 1: Gene-level classification
+---
 
-### What I did
+## 2. Methods
 
-1. **Feature selection.** I used an ANOVA F-test to keep the 1,000 most informative genes. I put this step inside the cross-validation, so the validation folds never influenced which genes were chosen.
-2. **Removing redundancy.** I dropped genes that were very strongly correlated (|r| > 0.8). Only 3 genes were removed, so we ended up with **997 genes**.
-3. **Four models.** Logistic Regression, Random Forest, SVM and XGBoost.
+### 2.1 Dataset
 
-### Results
+I used the processed PBMC 3k dataset (peripheral blood mononuclear cells) from the `scanpy` package. It has 2,638 cells and 1,838 genes, and eight annotated cell types: CD4 T cells, CD8 T cells, B cells, NK cells, CD14+ monocytes, FCGR3A+ monocytes, dendritic cells and megakaryocytes.
 
-| Model | Test accuracy | Test macro F1 | CD8 recall |
-|---|---:|---:|---:|
-| **Logistic Regression (tuned)** | **0.943** | **0.925** | 0.825 |
-| SVM | 0.941 | 0.920 | 0.794 |
-| XGBoost (default settings) | 0.930 | 0.893 | 0.778 |
-| Random Forest | 0.917 | 0.858 | 0.635 |
+I deliberately selected the **already processed version**. Quality control, normalisation, log transformation, selection of highly variable genes and scaling were already done by the data provider. My focus was on modelling and feature representation, and this choice also saved time. The downside is that I did not build or check the preprocessing myself, and that only highly variable genes are available (this matters later for the pathway coverage).
 
-The simple, regularised **Logistic Regression won**. That was a bit of a surprise for me, but it makes sense: we have many features and not so many cells, and a linear model with strong regularisation is hard to overfit. As a bonus, it is also the easiest model to explain.
+The classes are strongly imbalanced (Figure 1): there are 1,144 CD4 T cells but only 15 megakaryocytes. For this reason, I used **macro F1** as the main metric. In simple words, macro F1 gives every cell type the same weight, so rare cell types are not ignored like they can be in accuracy.
 
-Also, selecting 1,000 genes worked as well as using all 1,838, so a big part of the genes did not add much for this task.
+![Figure 1](images/01_cell_type_distribution.png)
 
-### The weak spot: CD4 vs. CD8 T cells
+*Figure 1. Number of cells per cell type. The dataset is strongly imbalanced.*
 
-Overall accuracy was 94%, which sounds great. But when I looked at the confusion matrix, one problem was clear: **CD4 and CD8 T cells get mixed up**. In the tuned model, 10 CD4 cells were called CD8, and 10 CD8 cells were called CD4.
+### 2.2 Data split and validation
 
-![Confusion matrix of the gene-level model](images/02_gene_level_confusion_matrix.png)
+The data were split into 80% training (2,110 cells) and 20% test (528 cells) with stratified sampling, so that every cell type keeps its proportion. Hyperparameters were tuned with stratified 5-fold cross-validation on the training set only. The test set was used once, for the final evaluation. The same split was used for all models and for the pathway-level analysis.
 
-## 4. Going deeper: why are some CD8 cells misclassified?
+Evaluation metrics were accuracy, macro F1, weighted F1 and confusion matrices.
 
-I did not want to stop at "the model makes mistakes", so I asked why.
+### 2.3 RQ1: gene-level classification
 
-**Is it one bad algorithm?** No. I checked every CD8 cell in the test set: **10 out of 63 (16%) were called CD4 by all four models**. So the problem is in the cells (or in the features), not in a single algorithm.
+- **Feature selection.** An ANOVA F-test (`SelectKBest`) selected the most informative genes. The number of genes (k) was tuned inside the cross-validation pipeline together with the regularisation strength, so the validation folds could not influence the selection. The best result was k = 1,000.
+- **Redundancy reduction.** For every pair of selected genes with an absolute correlation above 0.8, one gene was removed. Only three genes were removed, which left **997 genes**.
+- **Models.** Logistic Regression, Random Forest, Support Vector Machine (RBF kernel) and XGBoost. Class weights were balanced where possible. XGBoost was used with default settings.
 
-**Which genes matter?** In Logistic Regression, the difference between the CD8 and CD4 coefficients tells us how much each gene pushes a cell towards CD8 or CD4. The strongest "CD8" genes are cytotoxic genes like `CCL5`, `NKG7`, `GZMK`, `CST7` and `GZMA`. On the CD4 side we find `TNFRSF4` and `MAL`.
+### 2.4 RQ2: pathway-level classification
 
-![Genes separating CD8 from CD4](images/03_cd8_vs_cd4_genes.png)
+For the biological representation, I used immune-related pathways from the Reactome database (`Reactome_2022`, loaded with `gseapy`). I selected pathways by keywords (for example immune, interferon, cytokine, antigen, interleukin). For every pathway, I identified the genes that are in the dataset, and I excluded pathways with fewer than five matched genes. This left **30 pathways**.
 
-**What do the misclassified cells look like?** Their cytotoxic genes are low. For example, `CCL5` is 1.81 in correct CD8 cells, -0.32 in correct CD4 cells, and only 0.03 in the misclassified CD8 cells. So these cells look more like CD4 cells to the model.
+The pathway score of a cell is the **mean standardised expression** of the matched genes. These 30 scores were the input of a Logistic Regression (with standardisation, balanced class weights and tuned `C`), using the same cells, split and folds as the gene-level model. As a first exploration, I also tested the 50 Hallmark gene sets, but these gave weaker results (test macro F1 0.62), probably because they are not designed for immune cell types.
 
-![Expression of key genes in misclassified CD8 cells](images/04_misclassified_cd8_heatmap.png)
+One important point: these scores summarise the expression of the genes in a pathway. They are **not** direct measurements of pathway activity.
 
-**Zooming in on one cell.** I picked cell 71, which the model was most sure about (87% CD4, only 5% CD8). For every gene I calculated its contribution to the decision: expression × (CD8 weight − CD4 weight). I also checked that these contributions plus the intercept add up *exactly* to the model's score, so the explanation is exact for this model.
+---
 
-What I found for cell 71:
+## 3. Results
 
-- Its cytotoxic genes (`CCL5`, `NKG7`, `CST7`, ...) have low expression, so they push the decision towards CD4.
-- Genes like `MAL`, `NT5C3A` and `AQP3` are high and also push towards CD4.
-- A few genes (for example `LRBA`) push towards CD8, but not enough.
-- No single gene decides. It is the sum of many small contributions.
+### 3.1 RQ1: gene-level classification
 
-![Gene contributions for cell 71](images/05_cell71_contributions.png)
+Table 1 shows the test performance of the four models.
 
-One important note: this explains **the model**, not the biology. I cannot say these genes *cause* the error.
+**Table 1. Gene-level models (test set, 997 genes)**
 
-## 5. Part 2: Pathway-level features
+| Model | Accuracy | Macro F1 | CD4 recall | CD8 recall |
+|---|---:|---:|---:|---:|
+| **Logistic Regression (tuned)** | **0.943** | **0.925** | 0.952 | 0.825 |
+| SVM (RBF, tuned) | 0.941 | 0.920 | 0.952 | 0.794 |
+| XGBoost (default) | 0.930 | 0.893 | 0.952 | 0.778 |
+| Random Forest (200 trees) | 0.917 | 0.858 | 0.983 | 0.635 |
 
-### Idea
+The tuned Logistic Regression had the best result on all metrics. Its cross-validated macro F1 was 0.936, and the best regularisation was strong (`C = 0.01`). This makes sense: we have many features and relatively few cells, so a strongly regularised linear model is not easy to overfit. Also, using 1,000 selected genes worked as well as using all 1,838 genes, so many genes did not add much information.
 
-Instead of 997 genes, I describe each cell with **30 immune-related Reactome pathways** (like *Interferon Signaling* or *TCR Signaling*). For each pathway, I take the genes that are in my dataset (at least 5 needed) and calculate the **average standardised expression**. Then I train a Logistic Regression on these 30 scores, using exactly the same cells and the same cross-validation as before.
+The Random Forest had the highest CD4 recall but the lowest CD8 recall. This suggests that it tends to give uncertain T cells to the large CD4 class.
 
-I also tried the 50 Hallmark gene sets first as a quick test. They were weaker (test macro F1 0.62), probably because they are not made for immune cell types. This is why I moved to immune pathways from Reactome.
+A note on the SVM: its cross-validated macro F1 (0.823) was much lower than its test macro F1 (0.920). The smallest classes have only two or three cells per validation fold, so the fold scores are unstable. I would not compare these two numbers directly.
 
-### Results
+### 3.2 Error analysis: CD4 and CD8 T cells
 
-| | Gene-level LR | Reactome pathway-level LR |
+Overall accuracy was high, but the confusion matrix (Figure 2) shows a clear weak point: CD4 and CD8 T cells are mixed up. In the tuned Logistic Regression, 10 CD4 cells were predicted as CD8, and 10 CD8 cells were predicted as CD4.
+
+![Figure 2](images/02_gene_level_confusion_matrix.png)
+
+*Figure 2. Confusion matrix of the tuned gene-level Logistic Regression.*
+
+**Is the problem specific to one algorithm?** No. Out of 63 CD8 T cells in the test set, 42 were never predicted as CD4, but **10 cells (15.9%) were predicted as CD4 by all four models**. So the difficulty is probably in the cells or in the features, not in the algorithm.
+
+**Which genes drive the CD8/CD4 decision?** In a multinomial Logistic Regression, the difference between the CD8 and CD4 coefficients is the weight of each gene in the CD8-versus-CD4 decision. Figure 3 shows the 20 genes with the largest difference. Cytotoxicity-related genes (`CCL5`, `NKG7`, `GZMK`, `CST7`, `GZMA`) push towards CD8, while `TNFRSF4` and `MAL` push towards CD4.
+
+![Figure 3](images/03_cd8_vs_cd4_genes.png)
+
+*Figure 3. Top 20 genes by coefficient difference (CD8 minus CD4). Positive values favour CD8.*
+
+**How do the misclassified cells look?** Figure 4 compares the mean expression of these genes in three groups. The misclassified CD8 cells have low cytotoxic gene expression. For example, the mean `CCL5` value is 1.81 in correctly classified CD8 cells, −0.32 in correctly classified CD4 cells and 0.03 in the misclassified CD8 cells. So, for the model, these cells look more like CD4 cells. The group is not uniform, however: some cells have high `LYAR`, `KLRB1` or `GYG1`.
+
+![Figure 4](images/04_misclassified_cd8_heatmap.png)
+
+*Figure 4. Mean expression of the top 20 discriminative genes in correct CD4 cells, misclassified CD8 cells and correct CD8 cells.*
+
+**A closer look at one cell.** I analysed cell 71, the cell with the strongest preference for CD4 (P(CD4) = 0.874, P(CD8) = 0.046). For each gene, the contribution to the CD8-versus-CD4 score was calculated as expression × (CD8 coefficient − CD4 coefficient). The contributions plus the intercept difference reproduced the model score exactly (absolute error around 10⁻¹⁶), so this explanation is exact for the model. Two patterns appear (Figure 5):
+
+1. Low expression of cytotoxic genes (`CCL5`, `NKG7`, `CTSW`, `CST7`, `GZMA`, `GZMK`) reduces the CD8 score.
+2. High expression of genes with CD4-favouring weights (`MAL`, `NT5C3A`, `AQP3`) adds to the push towards CD4.
+
+Some genes support CD8 (for example `LRBA`, +0.333), but not enough. The decision is therefore the sum of many small contributions, not one dominant gene. This analysis explains the *model*; it does not prove that these genes are the biological reason for the error.
+
+![Figure 5](images/05_cell71_contributions.png)
+
+*Figure 5. Gene contributions to the CD8-versus-CD4 score of cell 71 (15 strongest in each direction). Negative values push towards CD4.*
+
+### 3.3 RQ2: pathway-level classification
+
+The Reactome model (30 pathway scores) reached a cross-validated macro F1 of 0.742, a test accuracy of 0.778 and a test macro F1 of 0.697. It recognised clearly distinct cell types quite well (B cells F1 0.93, CD14+ monocytes 0.83, NK cells 0.78). But it was much weaker for similar cell types: CD8 T cells (F1 0.48), FCGR3A+ monocytes (0.52) and dendritic cells (0.32). In the confusion matrix (Figure 6), 31 CD4 T cells were predicted as CD8, 17 CD8 cells as CD4, and 12 more CD8 cells as NK cells. The two monocyte types were also confused.
+
+![Figure 6](images/06_reactome_confusion_matrix.png)
+
+*Figure 6. Confusion matrix of the tuned Reactome pathway-level Logistic Regression.*
+
+### 3.4 Comparison of the two representations
+
+**Table 2. Gene-level vs. pathway-level Logistic Regression**
+
+| Metric | Gene-level (997 features) | Reactome pathway-level (30 features) |
 |---|---:|---:|
-| Number of features | 997 | 30 |
 | Cross-validation macro F1 | 0.936 | 0.742 |
 | Test accuracy | 0.943 | 0.778 |
 | Test macro F1 | 0.925 | 0.697 |
 
-The pathway model is clearly worse. It still recognises cell types with a very clear signature well (B cells F1 0.93, NK cells 0.78), but it struggles with similar cells. For example, 31 CD4 T cells were predicted as CD8, 17 CD8 cells as CD4, and 12 more CD8 cells as NK cells. The two monocyte types were also mixed up.
+The gene-level model was better on all metrics.
 
-![Confusion matrix of the Reactome pathway model](images/06_reactome_confusion_matrix.png)
+---
 
-### Why is it worse? (my interpretation)
+## 4. Discussion
 
-I want to be careful here, because I did not test every possible reason. These are the explanations I think are likely:
+**Classical models for single-cell classification.** Regularised linear models worked best here, and they are also the easiest to interpret. The error analysis was important: an accuracy of 94% hides the fact that one specific pair of cell types (CD4/CD8) causes most of the errors.
 
-- **Information loss.** An average gives all genes in a pathway the same weight. But genes in the same pathway can behave very differently. Mathematically, the pathway model is a restricted version of the gene model (a linear model with the same weight for all genes of a pathway), so it cannot use gene-specific differences.
-- **Low gene coverage.** My dataset only has highly variable genes, so on average only about 17% of each pathway's genes are available.
-- **Other factors.** My pathway selection was keyword-based, some pathways overlap (parent and child pathways), and 30 features is much less than 997.
+**Why did the pathway features perform worse?** A likely reason is information loss. Averaging gives every gene in a pathway the same weight, but genes in one pathway can behave differently. In more technical words, a pathway score is a fixed linear combination of genes, so a Logistic Regression on pathway scores is a restricted version of a Logistic Regression on genes, with equal weights inside each pathway. However, I cannot say that aggregation is the only reason. Other possible factors are:
 
-I cannot say how much each of these matters. Testing them one by one would be a good next step.
+- **low gene coverage:** the dataset contains only highly variable genes, so on average only about 17% of each pathway's genes are available;
+- **keyword-based pathway selection** and **overlapping pathways** (parent and child pathways share many genes);
+- the **much lower dimension** (30 vs. 997 features).
 
-## 6. Is the pathway model more interpretable?
+I did not test these factors one by one, so their individual effect is unknown.
 
-This was my main hope, and my honest answer is: **not automatically**. Pathways have biological names, which sounds nice. But my score is just a simple average. It does not know about activation, inhibition, or which genes are more important inside a pathway. I also did not test if people can explain pathway predictions better than gene predictions. So I see this as a first exploration, not as a finished interpretable model.
+**Interpretability.** Pathway features are linked to named biological processes, so they have a potential interpretability advantage. But biologically annotated features do not automatically make a model interpretable. The mean score ignores regulation, activation or inhibition, and the different roles of genes in a pathway. Also, I did not test whether pathway-level predictions are easier to explain than gene-level ones. The pathway model is therefore an initial exploration, not a fully interpretable biological model. In my view, the main lesson is that adding biological knowledge needs more than grouping genes by pathway.
 
-## 7. What I learned
+---
 
-- A strong baseline matters. A simple, regularised linear model beat trees and was easier to explain.
-- Always look at the errors, not only the accuracy. 94% accuracy hid a clear CD4/CD8 problem.
-- Adding biological knowledge to the features does not automatically improve performance or interpretability. You have to design it carefully.
-- This made me want to explore models that use biological structure (pathways, interaction networks) *inside* the model design, not only for explaining it afterwards.
+## 5. Conclusion
 
-## 8. Limitations
+1. **RQ1:** Classical machine learning classifies PBMC cell types well. The best model was a tuned Logistic Regression with 997 genes (test accuracy 0.943, macro F1 0.925). The remaining difficulty is the separation of CD4 and CD8 T cells, and the gene-level analysis links it to weaker cytotoxic gene expression in the misclassified CD8 cells.
+2. **RQ2:** Reactome pathway scores (30 features) reached a test accuracy of 0.778 and macro F1 of 0.697. This shows a trade-off between keeping detailed gene information and adding biological structure. Simple pathway averaging was not enough to keep the information needed for accurate classification.
 
-- One small dataset (PBMC 3k). I did not test on independent data.
-- There is no donor information. If cells from the same donor are in both training and test sets, the results can look better than they really are.
-- The rare classes are tiny in the test set (3 megakaryocytes, 7 dendritic cells), so their scores and the macro F1 are noisy.
-- Only simple mean-based pathway scores. Rank-based methods (like AUCell) could give different results.
-- In the gene-level part, the later models used genes selected once on the full training set (not inside each fold). The first grid search, which did the selection inside the folds, gave almost the same score (0.937 vs 0.936), so I think the effect is small. The test set was never used for selection.
+---
 
-## 9. How to run it
+## 6. Limitations and future work
+
+- **One small dataset, processed version.** Only PBMC 3k was used, without independent validation, and I did not do the raw-data preprocessing myself. Starting from raw counts would be a useful check.
+- **No donor information.** If cells from one donor appear in both training and test sets, the results may overestimate generalisation to new donors.
+- **Small classes.** The test set contains only 3 megakaryocytes and 7 dendritic cells, so class-level scores and macro F1 are noisy.
+- **Simple pathway scoring.** Mean expression is only one option. Rank-based methods (for example AUCell) may capture different information.
+- **No gene interactions.** Biological knowledge was used only to build features, not inside the model.
+- **Gene selection and cross-validation.** The first grid search did the selection inside the folds (CV macro F1 0.937). For the later models, the genes were selected once on the full training set (0.936). The scores are almost the same, so the effect seems small, and the test set was never used for selection.
+- **Random Forest tuning.** The number of trees was chosen using all genes without class weights, while the final model used the reduced gene set with balanced weights.
+
+**Future work:** alternative pathway representations, the contribution of single pathways to the predictions, testing the possible reasons for the performance gap one by one, and models that include pathways or molecular interaction networks directly in their design.
+
+---
+
+## 7. Reproducibility
 
 ```bash
 pip install scanpy scikit-learn pandas numpy matplotlib seaborn xgboost gseapy
 jupyter notebook Single_cell_ML_project_clean.ipynb
 ```
 
-The pathway part downloads the gene sets from Enrichr through `gseapy`, so you need an internet connection. The dataset is downloaded automatically by `scanpy`.
+All random seeds are fixed (`random_state=42`). The dataset is downloaded automatically by `scanpy`. The pathway part needs an internet connection, because `gseapy` downloads the gene sets from Enrichr.
 
 **Tools:** Python, scanpy, scikit-learn, XGBoost, gseapy, pandas, seaborn.
