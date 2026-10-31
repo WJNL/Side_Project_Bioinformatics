@@ -12,7 +12,6 @@ Single-cell RNA sequencing (scRNA-seq) gives us gene expression for thousands of
 
 The tuned Logistic Regression with 997 genes performed best (test accuracy 0.943, macro F1 0.925). Its main weakness was the separation of CD4 and CD8 T cells. About 16% of the CD8 T cells in the test set were predicted as CD4 T cells by all four models. The pathway-level model with 30 features performed clearly worse (test accuracy 0.778, macro F1 0.697). In simple words: summarising genes into pathway averages made the data easier to read biologically, but it also removed information that the model needed.
 
-**Keywords:** scRNA-seq, cell-type classification, feature selection, Logistic Regression, pathway analysis, Reactome, model interpretability
 
 ---
 
